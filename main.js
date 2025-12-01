@@ -1,36 +1,20 @@
-const { program } = require("commander");
+require("dotenv").config();
 const express = require("express");
 const fs = require("fs");
 const multer = require("multer");
 const path = require("path");
 const swaggerUi = require("swagger-ui-express");
 const swaggerSpec = require("./swagger");
+const pool = require("./db");
 
-program
-  .requiredOption("-h, --host <host>", "Server listen host")
-  .requiredOption("-p, --port <number>", "Server listen port")
-  .requiredOption("-c, --cache <path>", "Path to cache directory");
+const HOST = process.env.HOST;
+const PORT = process.env.PORT;
+const CACHE = process.env.CACHE_DIR;
 
-program.parse();
-const options = program.opts();
-
-const { port, host, cache } = options;
-const uploadsPath = path.join(cache, "uploads");
-const dbFile = path.join(cache, "inventory.json");
-
-if (!fs.existsSync(cache)) {
-  fs.mkdirSync(cache, { recursive: true });
+if (!fs.existsSync(CACHE)) {
+  fs.mkdirSync(CACHE, { recursive: true });
 }
-
-if (!fs.existsSync(uploadsPath)) {
-  fs.mkdirSync(uploadsPath);
-}
-const upload = multer({ dest: uploadsPath });
-
-if (!fs.existsSync(dbFile)) {
-  fs.writeFileSync(dbFile, JSON.stringify({ nextId: 1, list: [] }), "utf-8");
-}
-let inventory = JSON.parse(fs.readFileSync(dbFile));
+const upload = multer({ dest: CACHE });
 
 const app = express();
 app.use(express.json());
@@ -38,14 +22,13 @@ app.use(express.urlencoded({ extended: true }));
 app.use(express.static("public"));
 
 const formatItemResponse = (item) => {
-  const photoUrl = item.photo
-    ? `http://${host}:${port}/inventory/${item.id}/photo`
-    : null;
+  const photoUrl = item.photo ? `/inventory/${item.id}/photo` : null;
   return {
     ...item,
     photo: photoUrl,
   };
 };
+
 /**
  * @swagger
  * /register:
@@ -77,23 +60,33 @@ const formatItemResponse = (item) => {
  *       400:
  *         description: Name is required
  */
-app.post("/register", upload.single("photo"), (req, res) => {
+app.post("/register", upload.single("photo"), async (req, res) => {
   let { inventory_name, description } = req.body;
-  if (!inventory_name) return res.status(400).send("Name required");
+  if (!inventory_name) {
+    if (req.file) fs.unlinkSync(req.file.path);
+    return res.status(400).send("Name required");
+  }
 
   if (!description) description = "";
-  const id = inventory.nextId;
-  inventory.nextId += 1;
 
   let photo = null;
   if (req.file) photo = req.file.filename;
 
-  const item = { id, inventory_name, description, photo };
-  inventory.list.push(item);
+  try {
+    let id = (
+      await pool.query(
+        `INSERT INTO inventory (inventory_name, description, photo) VALUES ($1,$2,$3) RETURNING id`,
+        [inventory_name, description, photo]
+      )
+    ).rows[0].id;
 
-  fs.writeFileSync(dbFile, JSON.stringify(inventory));
-
-  res.status(200).json(formatItemResponse(item));
+    res
+      .status(200)
+      .json(formatItemResponse({ id, inventory_name, description, photo }));
+  } catch (err) {
+    if (req.file) fs.unlinkSync(req.file.path);
+    res.status(500).json(err.message);
+  }
 });
 
 /**
@@ -106,9 +99,13 @@ app.post("/register", upload.single("photo"), (req, res) => {
  *       200:
  *         description: List of inventory items
  */
-app.get("/inventory", (req, res) => {
-  const inventories = inventory.list.map(formatItemResponse);
-  res.status(200).json(inventories);
+app.get("/inventory", async (req, res) => {
+  try {
+    const inventories = (await pool.query(`SELECT * FROM inventory;`)).rows;
+    res.status(200).json(inventories.map(formatItemResponse));
+  } catch (err) {
+    res.status(500).json(err.message);
+  }
 });
 
 /**
@@ -130,13 +127,21 @@ app.get("/inventory", (req, res) => {
  *       404:
  *         description: Item not found
  */
-app.get("/inventory/:id", (req, res) => {
+app.get("/inventory/:id", async (req, res) => {
   const id = req.params.id;
-  const item = inventory.list.find((v) => v.id === Number(id));
-  if (item) {
-    res.status(200).json(formatItemResponse(item));
-  } else {
-    res.status(404).json("Inventory with this id not found");
+
+  try {
+    const item = (
+      await pool.query(`SELECT * FROM inventory WHERE id = $1;`, [id])
+    ).rows[0];
+
+    if (item) {
+      res.status(200).json(formatItemResponse(item));
+    } else {
+      res.status(404).json("Inventory with this id not found");
+    }
+  } catch (err) {
+    res.status(500).json(err.message);
   }
 });
 
@@ -170,22 +175,32 @@ app.get("/inventory/:id", (req, res) => {
  *       404:
  *         description: Item not found
  */
-app.put("/inventory/:id", (req, res) => {
+app.put("/inventory/:id", async (req, res) => {
   const { inventory_name, description } = req.body;
 
   const id = req.params.id;
-  const item = inventory.list.find((v) => v.id === Number(id));
 
-  if (!item) {
-    if (req.file) fs.unlinkSync(req.file.path);
-    return res.status(404).json("Inventory with this id not found");
+  try {
+    const item = (
+      await pool.query(`SELECT * FROM inventory WHERE id = $1;`, [id])
+    ).rows[0];
+
+    if (!item) {
+      return res.status(404).json("Inventory with this id not found");
+    }
+
+    item.inventory_name = inventory_name ?? item.inventory_name;
+    item.description = description ?? item.description;
+
+    await pool.query(
+      `UPDATE inventory SET inventory_name=$1, description=$2 WHERE id = $3;`,
+      [item.inventory_name, item.description, id]
+    );
+
+    res.status(200).json(formatItemResponse(item));
+  } catch (err) {
+    res.status(500).json(err.message);
   }
-  item.inventory_name = inventory_name ?? item.inventory_name;
-  item.description = description ?? item.description;
-
-  fs.writeFileSync(dbFile, JSON.stringify(inventory));
-
-  res.status(200).json(formatItemResponse(item));
 });
 
 /**
@@ -212,16 +227,21 @@ app.put("/inventory/:id", (req, res) => {
  *       404:
  *         description: Item or photo not found
  */
-app.get("/inventory/:id/photo", (req, res) => {
+app.get("/inventory/:id/photo", async (req, res) => {
   const id = req.params.id;
-  const item = inventory.list.find((v) => v.id === Number(id));
 
-  if (!item) {
-    res.status(404).json("Inventory with this id not found");
-  } else if (item.photo === null) {
-    res.status(404).json("Inventory has no photo");
-  } else {
-    const photoPath = path.join(uploadsPath, item.photo);
+  try {
+    const item = (
+      await pool.query(`SELECT * FROM inventory WHERE id = $1;`, [id])
+    ).rows[0];
+
+    if (!item) {
+      return res.status(404).json("Inventory with this id not found");
+    } else if (item.photo === null) {
+      return res.status(404).json("Inventory has no photo");
+    }
+
+    const photoPath = path.join(CACHE, item.photo);
 
     if (!fs.existsSync(photoPath)) {
       return res.status(404).send("Photo not found");
@@ -229,6 +249,8 @@ app.get("/inventory/:id/photo", (req, res) => {
 
     res.setHeader("Content-Type", "image/jpeg");
     res.sendFile(photoPath, { root: __dirname });
+  } catch (err) {
+    res.status(500).json(err.message);
   }
 });
 
@@ -262,26 +284,38 @@ app.get("/inventory/:id/photo", (req, res) => {
  *       404:
  *         description: Item not found
  */
-app.put("/inventory/:id/photo", upload.single("photo"), (req, res) => {
+app.put("/inventory/:id/photo", upload.single("photo"), async (req, res) => {
   const id = req.params.id;
-  const item = inventory.list.find((v) => v.id === Number(id));
 
-  if (!item) {
-    if (req.file) fs.unlinkSync(req.file.path);
-    return res.status(404).json("Inventory with this id not found");
-  }
+  try {
+    const item = (
+      await pool.query(`SELECT * FROM inventory WHERE id = $1;`, [id])
+    ).rows[0];
 
-  if (item.photo) {
-    const oldPhotoPath = path.join(uploadsPath, item.photo);
-    if (fs.existsSync(oldPhotoPath)) {
-      fs.unlinkSync(oldPhotoPath);
+    if (!item) {
+      if (req.file) fs.unlinkSync(req.file.path);
+      return res.status(404).json("Inventory with this id not found");
     }
+
+    if (item.photo) {
+      const oldPhotoPath = path.join(CACHE, item.photo);
+      if (fs.existsSync(oldPhotoPath)) {
+        fs.unlinkSync(oldPhotoPath);
+      }
+    }
+
+    item.photo = req.file ? req.file.filename : null;
+
+    await pool.query(`UPDATE inventory SET photo=$1 WHERE id = $2;`, [
+      item.photo,
+      id,
+    ]);
+
+    res.status(200).json(formatItemResponse(item));
+  } catch (err) {
+    if (req.file) fs.unlinkSync(req.file.path);
+    res.status(500).json(err.message);
   }
-
-  item.photo = req.file ? req.file.filename : null;
-  fs.writeFileSync(dbFile, JSON.stringify(inventory, null, 2));
-
-  res.status(200).json(formatItemResponse(item));
 });
 
 /**
@@ -303,26 +337,29 @@ app.put("/inventory/:id/photo", upload.single("photo"), (req, res) => {
  *       404:
  *         description: Item not found
  */
-app.delete("/inventory/:id", (req, res) => {
+app.delete("/inventory/:id", async (req, res) => {
   const id = req.params.id;
-  const item = inventory.list.find((v) => v.id === Number(id));
+  try {
+    const item = (
+      await pool.query(`SELECT * FROM inventory WHERE id = $1;`, [id])
+    ).rows[0];
 
-  if (!item) {
-    return res.status(404).json("Inventory with this id not found");
-  }
-
-  if (item.photo) {
-    const photoPath = path.join(uploadsPath, item.photo);
-    if (fs.existsSync(photoPath)) {
-      fs.unlinkSync(photoPath);
+    if (!item) {
+      return res.status(404).json("Inventory with this id not found");
     }
+
+    if (item.photo) {
+      const photoPath = path.join(CACHE, item.photo);
+      if (fs.existsSync(photoPath)) {
+        fs.unlinkSync(photoPath);
+      }
+    }
+    await pool.query(`DELETE FROM inventory WHERE id = $1;`, [id]);
+
+    res.status(200).json();
+  } catch (err) {
+    res.status(500).json(err.message);
   }
-
-  inventory.list = inventory.list.filter((i) => i !== item);
-
-  fs.writeFileSync(dbFile, JSON.stringify(inventory));
-
-  res.status(200).json();
 });
 
 /**
@@ -352,29 +389,35 @@ app.delete("/inventory/:id", (req, res) => {
  *       404:
  *         description: Item not found
  */
-app.post("/search", (req, res) => {
+app.post("/search", async (req, res) => {
   const { id, has_photo } = req.body;
-  const item = inventory.list.find((v) => v.id === parseInt(id));
 
-  if (!item) {
-    return res.status(404).json("Inventory with this id not found");
-  }
+  try {
+    const item = (
+      await pool.query(`SELECT * FROM inventory WHERE id = $1;`, [id])
+    ).rows[0];
 
-  const { photo, ...responseItem } = formatItemResponse(item);
-
-  if (has_photo === "on") {
-    if (photo) {
-      responseItem.description += " [Photo:" + photo + "]";
-    } else {
-      responseItem.description += " [No photo available]";
+    if (!item) {
+      return res.status(404).json("Inventory with this id not found");
     }
-  }
+    const { photo, ...responseItem } = formatItemResponse(item);
 
-  res.status(200).json(responseItem);
+    if (has_photo === "on") {
+      if (photo) {
+        responseItem.description += " [Photo: " + photo + " ]";
+      } else {
+        responseItem.description += " [No photo available]";
+      }
+    }
+
+    res.status(200).json(responseItem);
+  } catch (err) {
+    res.status(500).json(err.message);
+  }
 });
 
 app.use("/docs", swaggerUi.serve, swaggerUi.setup(swaggerSpec));
 
-app.listen(port, host, () => {
-  console.log(`Server running at http://${host}:${port}/`);
+app.listen(PORT, HOST, () => {
+  console.log(`Server running at http://${HOST}:${PORT}/`);
 });

@@ -4,15 +4,17 @@
   "main": "main.js",
   "type": "commonjs",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "start": "node main.js",
+    "dev": "nodemon -L main.js"
   },
   "author": "",
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "commander": "^14.0.2",
+    "dotenv": "^17.2.3",
     "express": "^5.1.0",
     "multer": "^2.0.2",
+    "pg": "^8.16.3",
     "swagger-jsdoc": "^6.2.8",
     "swagger-ui-express": "^5.0.1"
   },

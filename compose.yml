@@ -4,9 +4,27 @@ services:
     build: .
     restart: always
     ports:
-      - "3000:3000"
+      - "${PORT}:${PORT}"
     env_file:
       - .env
+    depends_on:
+      - db
     volumes:
       - .:/app
-    command: ["npm", "run", "dev"] 
+    command: ["npm", "run","dev"] 
+  
+  db:
+    image: postgres:16
+    restart: always
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    ports:
+      - "${DB_PORT}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      - ./db_init:/docker-entrypoint-initdb.d
+
+volumes:
+  db_data:

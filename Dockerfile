@@ -9,4 +9,4 @@ COPY . .
 
 EXPOSE 3000
 
-CMD ["node","main.js","-h","0.0.0.0","-p","3000","-c","./cache"]
+CMD ["npm","run","dev"]
