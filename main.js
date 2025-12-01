@@ -11,9 +11,6 @@ const HOST = process.env.HOST;
 const PORT = process.env.PORT;
 const CACHE = process.env.CACHE_DIR;
 
-if (!fs.existsSync(CACHE)) {
-  fs.mkdirSync(CACHE, { recursive: true });
-}
 const upload = multer({ dest: CACHE });
 
 const app = express();
@@ -248,7 +245,7 @@ app.get("/inventory/:id/photo", async (req, res) => {
     }
 
     res.setHeader("Content-Type", "image/jpeg");
-    res.sendFile(photoPath, { root: __dirname });
+    res.sendFile(photoPath, { root: "/" });
   } catch (err) {
     res.status(500).json(err.message);
   }

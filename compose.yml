@@ -12,7 +12,8 @@ services:
       - db
     volumes:
       - .:/app
-    command: ["npm", "run","debug"] 
+      - cache:${CACHE_DIR}
+    command: ["npm", "run","dev"] 
   
   db:
     image: postgres:16
@@ -28,4 +29,5 @@ services:
       - ./db_init:/docker-entrypoint-initdb.d
 
 volumes:
+  cache:
   db_data:
