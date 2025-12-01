@@ -5,13 +5,14 @@ services:
     restart: always
     ports:
       - "${PORT}:${PORT}"
+      - "9229:9229"
     env_file:
       - .env
     depends_on:
       - db
     volumes:
       - .:/app
-    command: ["npm", "run","dev"] 
+    command: ["npm", "run","debug"] 
   
   db:
     image: postgres:16

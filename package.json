@@ -5,7 +5,8 @@
   "type": "commonjs",
   "scripts": {
     "start": "node main.js",
-    "dev": "nodemon -L main.js"
+    "dev": "nodemon -L main.js",
+    "debug": "node --inspect=0.0.0.0:9229 main.js"
   },
   "author": "",
   "license": "ISC",
